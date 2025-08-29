@@ -1,11 +1,23 @@
-import { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  Events,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  ActivityType,
+} from "discord.js";
 import "dotenv/config";
-import express from "express";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 client.once(Events.ClientReady, () => {
   console.log(`Logged in as ${client?.user?.tag}`);
+
+  client.user?.setPresence({
+    activities: [{ name: "Chochox", type: ActivityType.Watching }],
+    status: "online", // "online" | "idle" | "dnd" | "invisible"
+  });
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -25,17 +37,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Auth": process.env.N8N_SHARED_SECRET || "" // opcional si validas en n8n
+          "X-Auth": process.env.N8N_SHARED_SECRET || "", // opcional si validas en n8n
         },
         body: JSON.stringify({
           prompt,
           userId: interaction.user.id,
-          channelId: interaction.channelId
-        })
+          channelId: interaction.channelId,
+        }),
       });
 
       const data = await res.json().catch(() => ({}));
-      const text: string = (data?.text ?? "No recibí respuesta del servicio.").slice(0, 1900);
+      const text: string = (
+        data?.text ?? "No recibí respuesta del servicio."
+      ).slice(0, 1900);
       await interaction.editReply(text);
     } catch (err) {
       console.error(err);
@@ -48,13 +62,18 @@ client.login(process.env.TOKEN);
 
 // ── Register slash commands (ping + chat)
 const commands = [
-  new SlashCommandBuilder().setName("ping").setDescription("Replies with Pong!"),
+  new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Replies with Pong!"),
   new SlashCommandBuilder()
     .setName("chat")
     .setDescription("Pregunta a la IA vía n8n")
     .addStringOption((o) =>
-      o.setName("prompt").setDescription("¿Qué quieres preguntar?").setRequired(true)
-    )
+      o
+        .setName("prompt")
+        .setDescription("¿Qué quieres preguntar?")
+        .setRequired(true)
+    ),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN as string);
@@ -73,11 +92,3 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN as string);
     console.error(error);
   }
 })();
-
-// ─── Servidor para Render ───
-const app = express();
-const PORT = process.env.PORT || 3000;
-app.get("/", (_, res) => res.send("Bot is alive 🚀"));
-app.listen(PORT, () => {
-  console.log(`🌐 Server running on port ${PORT}`);
-});
