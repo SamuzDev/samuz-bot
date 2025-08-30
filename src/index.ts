@@ -8,6 +8,7 @@ import {
   ActivityType,
 } from "discord.js";
 import "dotenv/config";
+import express from "express";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
@@ -92,3 +93,11 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN as string);
     console.error(error);
   }
 })();
+
+// ─── Servidor para Render ───
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get("/", (_, res) => res.send("Bot is alive 🚀"));
+app.listen(PORT, () => {
+  console.log(`🌐 Server running on port ${PORT}`);
+});
