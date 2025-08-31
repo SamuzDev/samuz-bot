@@ -6,11 +6,13 @@ import {
   Routes,
   SlashCommandBuilder,
   ActivityType,
+  TextChannel,
+  ChannelType
 } from "discord.js";
 import "dotenv/config";
 import express from "express";
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
 
 client.once(Events.ClientReady, () => {
   console.log(`Logged in as ${client?.user?.tag}`);
@@ -19,6 +21,31 @@ client.once(Events.ClientReady, () => {
     activities: [{ name: "Chochox", type: ActivityType.Watching }],
     status: "online", // "online" | "idle" | "dnd" | "invisible"
   });
+});
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  // No saludar bots
+  if (member.user.bot) return;
+
+  const message = `👋 ¡Bienvenid@ ${member} a **${member.guild.name}**!\n` +
+                  `Pasa por #reglas y usa \`/chat\` si necesitas ayuda.`;
+
+  // Canal elegido por .env o canal del sistema como fallback
+  const channelId = process.env.WELCOME_CHANNEL_ID || member.guild.systemChannelId;
+
+  try {
+    if (channelId) {
+      const ch = await member.guild.channels.fetch(channelId).catch(() => null);
+      if (ch && ch.type === ChannelType.GuildText) {
+        await (ch as TextChannel).send({ content: message });
+        return;
+      }
+    }
+    // Si no hay canal/permiso, intentamos por DM
+    await member.send(`¡Hola ${member.displayName}! Bienvenid@ a **${member.guild.name}**.`);
+  } catch (err) {
+    console.error("Welcome message failed:", err);
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
