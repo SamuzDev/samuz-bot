@@ -14,6 +14,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.78",
     "@types/node": "^22.13.11",
     "discord.js": "^14.22.1",
     "dotenv": "^17.2.1",

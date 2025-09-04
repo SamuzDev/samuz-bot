@@ -6,52 +6,190 @@ import {
   Routes,
   SlashCommandBuilder,
   ActivityType,
+  AttachmentBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  PermissionFlagsBits,
   TextChannel,
   ChannelType,
-  AttachmentBuilder,
+  MessageFlags,
 } from "discord.js";
 import "dotenv/config";
+import { fetchImageBuffer } from "./helpers/images.js";
 import express from "express";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
+function pick<T>(arr: T[]) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function ordinal(n: number): string {
+  const v = n % 100;
+  let suf = "th";
+  if (v < 11 || v > 13) {
+    switch (v % 10) {
+      case 1:
+        suf = "st";
+        break;
+      case 2:
+        suf = "nd";
+        break;
+      case 3:
+        suf = "rd";
+        break;
+    }
+  }
+  return `${n}${suf}`;
+}
+
+function rulesButton(guildId: string) {
+  const rulesId = process.env.RULES_CHANNEL_ID;
+  if (!rulesId) return null;
+  const url = `https://discord.com/channels/${guildId}/${rulesId}`;
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setLabel("📜 Read the Rules")
+      .setStyle(ButtonStyle.Link)
+      .setURL(url)
+  );
+}
+
 client.once(Events.ClientReady, () => {
   console.log(`Logged in as ${client?.user?.tag}`);
 
   client.user?.setPresence({
-    activities: [{ name: "Chochox", type: ActivityType.Watching }],
+    activities: [{ name: "Cuevana", type: ActivityType.Watching }],
     status: "online", // "online" | "idle" | "dnd" | "invisible"
   });
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
-  // No saludar bots
-  if (member.user.bot) return;
-
-  const message =
-    `👋 ¡Bienvenid@ ${member} a **${member.guild.name}**!\n` +
-    `Pasa por #reglas y usa \`/chat\` si necesitas ayuda.`;
-
-  // Canal elegido por .env o canal del sistema como fallback
-  const channelId =
-    process.env.WELCOME_CHANNEL_ID || member.guild.systemChannelId;
-
   try {
-    if (channelId) {
-      const ch = await member.guild.channels.fetch(channelId).catch(() => null);
-      if (ch && ch.type === ChannelType.GuildText) {
-        await (ch as TextChannel).send({ content: message });
-        return;
-      }
-    }
-    // Si no hay canal/permiso, intentamos por DM
-    await member.send(
-      `¡Hola ${member.displayName}! Bienvenid@ a **${member.guild.name}**.`
-    );
-  } catch (err) {
-    console.error("Welcome message failed:", err);
+    if (member.user.bot) return;
+
+    const channelId =
+      process.env.WELCOME_CHANNEL_ID || member.guild.systemChannelId;
+    const ch = channelId
+      ? await member.guild.channels.fetch(channelId).catch(() => null)
+      : null;
+    if (!ch?.isTextBased()) return;
+
+    const url = await getLandscapeFromNekosBest("waifu", 1.3, 10);
+
+    // 2) crear el banner con blur
+    const buffer = await makeBlurBannerFromUrl({
+      url: url || "",
+      width: 1280,
+      height: 640, // o 720 si prefieres 16:9
+      overlayDarken: 0.22,
+      border: true,
+    });
+
+    const count = member.guild.memberCount ?? 0;
+
+    const headlines = [
+      "🚀 Welcome aboard!",
+      "🎉 Glad you’re here!",
+      "🌟 A new star has arrived!",
+      "🔥 Fresh energy in the server!",
+    ];
+    const sublines = [
+      `Hey <@${member.id}>, make yourself at home.`,
+      `We’ve been waiting for you, <@${member.id}>!`,
+      `Big welcome to <@${member.id}>!`,
+      `Great to have you with us, <@${member.id}>.`,
+    ];
+    const footerLines = [
+      `You’re our **${ordinal(count)}** member.`,
+      `Don’t be shy—say hi!`,
+      `Type **/chat** if you need anything.`,
+      `Check the rules and have fun!`,
+    ];
+
+    const embed = new EmbedBuilder()
+      .setColor(0x22c55e)
+      .setTitle(pick(headlines) ?? null)
+      .setDescription(
+        `${pick(sublines)}\n\nWelcome to **${member.guild.name}**!\n${pick(
+          footerLines
+        )}`
+      )
+      .setThumbnail(
+        member.user.displayAvatarURL({ extension: "png", size: 256 })
+      )
+      .setImage("attachment://welcome.png")
+      .setTimestamp();
+
+    const row = rulesButton(member.guild.id);
+
+    await ch.send({
+      embeds: [embed.setImage("attachment://welcome.png")],
+      files: [{ attachment: buffer, name: "welcome.png" }],
+      components: row ? [row] : [],
+    });
+  } catch (e) {
+    console.error("Welcome card failed:", e);
+  }
+});
+
+client.on(Events.GuildMemberRemove, async (member) => {
+  try {
+    const channelId =
+      process.env.FAREWELL_CHANNEL_ID || member.guild.systemChannelId;
+    const ch = channelId
+      ? await member.guild.channels.fetch(channelId).catch(() => null)
+      : null;
+    if (!ch?.isTextBased()) return;
+
+    const username = member.displayName || member.user?.username || "Member";
+    const avatarUrl =
+      member.user?.displayAvatarURL({ extension: "png", size: 512 }) ||
+      "https://cdn.discordapp.com/embed/avatars/0.png";
+
+    const url = await getLandscapeFromNekosBest("waifu", 1.3, 10);
+
+    // 2) crear el banner con blur
+    const buffer = await makeBlurBannerFromUrl({
+      url: url || "",
+      width: 1280,
+      height: 640, // o 720 si prefieres 16:9
+      overlayDarken: 0.22,
+      border: true,
+    });
+
+    const headlines = [
+      "👋 Farewell for now!",
+      "💫 Until next time!",
+      "🛫 Safe travels!",
+      "🌌 See you on the next adventure!",
+    ];
+    const sublines = [
+      `**${username}** just left **${member.guild.name}**.`,
+      `Thanks for being with us, **${username}**.`,
+      `We’ll miss you, **${username}**.`,
+      `Hope to see you again, **${username}**!`,
+    ];
+
+    const embed = new EmbedBuilder()
+      .setColor(0x1f2937)
+      .setTitle(pick(headlines) ?? null)
+      .setDescription(`${pick(sublines)}\n\nDoors are always open ✨`)
+      .setThumbnail(avatarUrl)
+      .setImage("attachment://farewell.png")
+      .setTimestamp();
+
+    await ch.send({
+      embeds: [embed],
+      files: [{ attachment: buffer, name: "farewell.png" }],
+    });
+  } catch (e) {
+    console.error("Farewell send failed:", e);
   }
 });
 
@@ -61,6 +199,69 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.commandName === "ping") {
     await interaction.reply("Pong!");
     return;
+  }
+
+  if (interaction.commandName === "clean") {
+    // Solo el usuario permitido
+    if (interaction.user.id !== process.env.CLEAN_ALLOWED_USER_ID) {
+      return interaction.reply({
+        content: "❌ You can't use this command.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    // Asegúrate de que es en un servidor y hay canal
+    if (!interaction.inGuild() || !interaction.channel) {
+      return interaction.reply({
+        content: "❌ This only works in server text channels.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    const channel = interaction.channel;
+
+    // Limítalo a canales de texto/announcement (bulkDelete no funciona en DMs/threads)
+    if (
+      channel.type !== ChannelType.GuildText &&
+      channel.type !== ChannelType.GuildAnnouncement
+    ) {
+      return interaction.reply({
+        content: "❌ Only in regular text channels.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    const me = interaction.guild!.members.me;
+    if (!me) {
+      return interaction.reply({
+        content: "❌ Bot member not found in this guild.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    // ✅ En vez de channel.permissionsFor(me) usa:
+    const perms = me.permissionsIn(channel.id);
+    if (!perms.has(PermissionFlagsBits.ManageMessages)) {
+      return interaction.reply({
+        content: "❌ I need **Manage Messages** in this channel.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    const amount = interaction.options.getInteger("amount", true);
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const deleted = await (channel as TextChannel).bulkDelete(amount, true);
+      await interaction.editReply(
+        `🧹 Deleted **${deleted.size}** messages (older than 14 days can't be removed).`
+      );
+    } catch (err: any) {
+      console.error("clean error:", err);
+      await interaction.editReply(
+        `❌ Couldn't delete messages.\n\`\`\`${err?.message ?? err}\`\`\``
+      );
+    }
   }
 
   if (interaction.commandName === "imagine") {
@@ -237,6 +438,18 @@ const commands = [
         .setDescription("Imagen base (opcional)")
         .setRequired(false)
     ),
+  new SlashCommandBuilder()
+    .setName("clean")
+    .setDescription("Elimina mensajes recientes de este canal")
+    .addIntegerOption((o) =>
+      o
+        .setName("amount")
+        .setDescription("Cantidad (1-100)")
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(100)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
 ].map((cmd) => cmd.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN as string);
@@ -274,6 +487,139 @@ function extractImagePayload(data: any) {
   const imageUrl = data?.image_url || data?.imageUrl || "";
 
   return { b64, fileName, caption, imageUrl };
+}
+
+/**
+ * Devuelve una URL horizontal de nekos.best (si no encuentra, cae en la primera).
+ * @param category  "waifu" | "neko" | "kitsune" | "husbando"
+ * @param minAR     relación mínima (1.3 ≈ horizontal clara)
+ * @param amount    cuántas candidatas pedir a la API (1..20)
+ */
+export async function getLandscapeFromNekosBest(
+  category: "waifu" | "neko" | "kitsune" | "husbando" = "waifu",
+  minAR = 1.3,
+  amount = 8
+) {
+  const r = await fetch(
+    `https://nekos.best/api/v2/${category}?amount=${Math.min(
+      Math.max(amount, 1),
+      20
+    )}`
+  );
+  const j = await r.json();
+  const urls: string[] = (j?.results || [])
+    .map((x: any) => x?.url)
+    .filter(Boolean);
+
+  for (const u of urls) {
+    try {
+      const buf = await fetchImageBuffer(u); // ⬅️
+      const img = await loadImage(buf); // ⬅️
+      if (img.width / img.height >= minAR) return u;
+    } catch {}
+  }
+  if (urls.length) return urls[0];
+  throw new Error("nekos.best sin resultados");
+}
+
+/**
+ * Banner "cinemático": blur del fondo + la misma imagen en limpio centrada.
+ * Solo usa imágenes HORIZONTALES (minAR). Si no encuentra, usa la última como fallback.
+ */
+export async function makeBlurBannerFromUrl(opts: {
+  url: string;
+  width?: number;
+  height?: number;
+  overlayDarken?: number;
+  border?: boolean;
+}) {
+  const {
+    url,
+    width = 1280,
+    height = 640,
+    overlayDarken = 0.22,
+    border = true,
+  } = opts;
+
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+
+  // ⬇️ en vez de loadImage(url):
+  const buf = await fetchImageBuffer(url);
+  const img = await loadImage(buf);
+
+  // fondo con blur (cover)
+  try {
+    (ctx as any).filter = "blur(22px)";
+  } catch {}
+  const s = Math.max(width / img.width, height / img.height);
+  ctx.drawImage(
+    img,
+    (width - img.width * s) / 2,
+    (height - img.height * s) / 2,
+    img.width * s,
+    img.height * s
+  );
+  try {
+    (ctx as any).filter = "none";
+  } catch {}
+
+  if (overlayDarken > 0) {
+    ctx.fillStyle = `rgba(0,0,0,${overlayDarken})`;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // panel limpio centrado
+  const margin = 40;
+  const s2 = Math.min(
+    (width - margin * 2) / img.width,
+    (height - margin * 2) / img.height
+  );
+  const dw = img.width * s2,
+    dh = img.height * s2;
+  const dx = (width - dw) / 2,
+    dy = (height - dh) / 2;
+
+  roundedRect(ctx, dx, dy, dw, dh, 20);
+  ctx.save();
+  ctx.clip();
+  ctx.drawImage(img, dx, dy, dw, dh);
+  ctx.restore();
+
+  if (border) {
+    ctx.strokeStyle = "rgba(255,255,255,0.25)";
+    ctx.lineWidth = 2;
+    roundedRect(ctx, dx, dy, dw, dh, 20);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(255,255,255,0.22)";
+    ctx.lineWidth = 6;
+    ctx.strokeRect(12, 12, width - 24, height - 24);
+  }
+
+  return canvas.toBuffer("image/png");
+}
+
+function roundedRect(
+  ctx: any,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r = 16
+) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
 }
 
 // ─── Servidor para Render ───
