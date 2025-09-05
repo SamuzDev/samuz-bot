@@ -1,11 +1,21 @@
-import { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder, ActivityType, AttachmentBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits, TextChannel, ChannelType, MessageFlags, } from "discord.js";
+import { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder, ActivityType, AttachmentBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits, TextChannel, ChannelType, MessageFlags, Partials, } from "discord.js";
 import "dotenv/config";
 import { fetchImageBuffer } from "./helpers/images.js";
 import express from "express";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+    ],
+    partials: [Partials.Channel],
 });
+function cleanB64(s) {
+    const str = (s ?? "").toString();
+    return str.startsWith("data:") ? str.replace(/^data:[^;]+;base64,/, "") : str;
+}
 function pick(arr) {
     return arr[Math.floor(Math.random() * arr.length)];
 }
@@ -40,9 +50,140 @@ function rulesButton(guildId) {
 client.once(Events.ClientReady, () => {
     console.log(`Logged in as ${client?.user?.tag}`);
     client.user?.setPresence({
-        activities: [{ name: "Idk 💭", type: ActivityType.Listening }],
-        status: "online", // "online" | "idle" | "dnd" | "invisible"
+        activities: [{ name: "Overthinking 💭", type: ActivityType.Custom }],
+        status: "online", // 'idle' | 'dnd' | 'invisible'
     });
+});
+client.on(Events.MessageCreate, async (message) => {
+    try {
+        if (message.author.bot)
+            return;
+        // ¿menciona al bot?
+        const botId = client.user?.id;
+        if (!botId)
+            return;
+        const mentioned = message.mentions.users.has(botId) ||
+            new RegExp(`^<@!?${botId}>`).test(message.content);
+        if (!mentioned)
+            return;
+        // prompt = contenido sin la mención
+        const prompt = message.content.replace(new RegExp(`<@!?${botId}>`, "g"), "").trim() ||
+            "Enhance or transform the provided image(s) as requested.";
+        // recopilar imágenes del mensaje
+        const images = [];
+        for (const att of message.attachments.values()) {
+            const mime = att.contentType || "";
+            if (mime.startsWith("image/")) {
+                images.push({
+                    url: att.url,
+                    mime,
+                    name: att.name ?? "image",
+                    size: att.size ?? 0,
+                });
+            }
+        }
+        // si es reply, también mirar adjuntos del mensaje citado
+        if (message.reference?.messageId && images.length === 0) {
+            try {
+                const quoted = await message.fetchReference();
+                for (const att of quoted.attachments.values()) {
+                    const mime = att.contentType || "";
+                    if (mime.startsWith("image/")) {
+                        images.push({
+                            url: att.url,
+                            mime,
+                            name: att.name ?? "image",
+                            size: att.size ?? 0,
+                        });
+                    }
+                }
+            }
+            catch { }
+        }
+        // indicador de “escribiendo…”
+        await message.channel.sendTyping();
+        // payload para n8n (edición si hay imágenes; generación si no)
+        const payload = {
+            mode: images.length ? "edit" : "generate",
+            prompt,
+            images, // n8n descargará las URLs
+            userId: message.author.id,
+            channelId: message.channelId,
+            guildId: message.guildId,
+            messageId: message.id,
+        };
+        const res = await fetch(process.env.N8N_NANOBANANA_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Auth": process.env.N8N_SHARED_SECRET || "",
+            },
+            body: JSON.stringify(payload),
+        });
+        // --- respuesta binaria (una imagen) ---
+        const ct = res.headers.get("content-type") || "";
+        if (ct.startsWith("image/") || ct === "application/octet-stream") {
+            const buf = Buffer.from(await res.arrayBuffer());
+            await message.reply({
+                content: "", // o un caption corto
+                files: [new AttachmentBuilder(buf, { name: "result.png" })],
+            });
+            return;
+        }
+        // --- respuesta JSON (una o varias imágenes) ---
+        const raw = await res.text();
+        let data = {};
+        try {
+            data = JSON.parse(raw);
+        }
+        catch {
+            data = { text: raw };
+        }
+        const files = [];
+        // array de base64
+        if (Array.isArray(data.images_base64)) {
+            for (let i = 0; i < Math.min(10, data.images_base64.length); i++) {
+                const b64 = cleanB64(data.images_base64[i]);
+                if (typeof b64 === "string" && b64.length > 100) {
+                    files.push(new AttachmentBuilder(Buffer.from(b64, "base64"), {
+                        name: data.fileNames?.[i] || `image_${i + 1}.png`,
+                    }));
+                }
+            }
+        }
+        // array de URLs
+        if (!files.length && Array.isArray(data.image_urls)) {
+            for (let i = 0; i < Math.min(10, data.image_urls.length); i++) {
+                const u = data.image_urls[i];
+                const r = await fetch(u);
+                const buf = Buffer.from(await r.arrayBuffer());
+                files.push(new AttachmentBuilder(buf, { name: `image_${i + 1}.png` }));
+            }
+        }
+        // compat: un solo base64/url
+        if (!files.length && (data.image_base64 || data.imageBase64)) {
+            const b64 = cleanB64(data.image_base64 || data.imageBase64);
+            files.push(new AttachmentBuilder(Buffer.from(b64, "base64"), {
+                name: data.fileName || "image.png",
+            }));
+        }
+        else if (!files.length && (data.image_url || data.imageUrl)) {
+            const r = await fetch(data.image_url || data.imageUrl);
+            const buf = Buffer.from(await r.arrayBuffer());
+            files.push(new AttachmentBuilder(buf, { name: data.fileName || "image.png" }));
+        }
+        if (files.length) {
+            await message.reply({ content: data.caption ?? "", files });
+        }
+        else {
+            const text = (data.text ?? "No recibí imágenes del servicio.").slice(0, 1900);
+            await message.reply(text);
+        }
+    }
+    catch (err) {
+        console.error("mention->image error:", err);
+        await message.reply("❌ No pude procesar tus imágenes. Intenta de nuevo.");
+    }
 });
 client.on(Events.GuildMemberAdd, async (member) => {
     try {
